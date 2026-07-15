@@ -2,9 +2,15 @@
 bot.py
 Trendora Telegram bot — deal posting + group admin features.
 
-DEAL POSTING (private chat, admin only):
+DEAL POSTING (private chat, admin only, manual):
   /deal -> original link -> affiliate link -> category -> auto-posts to channel
            + saves Instagram-ready image
+
+AUTOMATIC DEAL POSTING (new):
+  Har 20 minute mein bot khud Amazon/Flipkart deals dhundta hai
+  (deal_finder.py), EarnKaro se affiliate link banata hai, AI caption
+  generate karta hai, Telegram channel par post karta hai, aur
+  Instagram-ready image admin ko bhej deta hai (bas upload karna hoga).
 
 GROUP ADMIN FEATURES:
   - Welcomes new members
@@ -19,6 +25,8 @@ Environment variables required:
   BOT_TOKEN        -> from @BotFather
   CHANNEL_ID       -> e.g. @yourchannel or -1001234567890
   ADMIN_USER_ID    -> your own numeric Telegram user id (only you can post deals / broadcast)
+  EARNKARO_TOKEN   -> from EarnKaro Affiliaters dashboard (API section)
+  GROQ_API_KEY     -> from https://console.groq.com/keys (AI captions/category)
 """
 
 import os
@@ -42,6 +50,7 @@ from image_generator import generate_deal_image
 from moderation import is_spam, faq_reply, detect_category_request
 import ai_client
 import storage
+import deal_finder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,6 +58,9 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID")
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID")
+
+# Har kitne minute mein ek naya deal try kiya jaye
+AUTO_POST_INTERVAL_MINUTES = 20
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instagram_ready")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -69,7 +81,7 @@ def is_admin(update: Update) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Deal creation flow (private chat, admin only)
+# Deal creation flow (private chat, admin only, MANUAL)
 # ---------------------------------------------------------------------------
 
 async def deal_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,7 +219,7 @@ async def receive_category_confirm(update: Update, context: ContextTypes.DEFAULT
     try:
         with open(image_path, "rb") as photo:
             await context.bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=caption)
-        storage.add_deal(ud["title"], affiliate_link, category)
+        storage.add_deal(ud["title"], affiliate_link, category, ud.get("original_link", ""))
         await update.message.reply_text(
             "Telegram channel par post ho gaya ✅\n"
             f"Instagram ke liye image yahan save hai: {image_path}\n"
@@ -226,6 +238,69 @@ async def receive_category_confirm(update: Update, context: ContextTypes.DEFAULT
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Cancel kar diya.")
     return ConversationHandler.END
+
+
+# ---------------------------------------------------------------------------
+# AUTOMATIC deal posting — runs every AUTO_POST_INTERVAL_MINUTES on its own,
+# no admin action needed. Uses deal_finder.py to discover + package a deal.
+# ---------------------------------------------------------------------------
+
+async def auto_post_deal(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Auto deal-finder chal raha hai...")
+
+    try:
+        deal = deal_finder.find_new_deal()
+    except Exception as e:
+        logger.error(f"deal_finder crash hua: {e}")
+        return
+
+    if not deal:
+        logger.info("Is baar koi naya achha-discount wala deal nahi mila.")
+        return
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_path = os.path.join(OUTPUT_DIR, f"deal_{timestamp}.jpg")
+
+    try:
+        generate_deal_image(
+            deal["title"], deal["image_url"], deal["mrp"], deal["price"],
+            deal["discount"], image_path,
+        )
+    except Exception as e:
+        logger.error(f"Auto-post image generation failed: {e}")
+        return
+
+    with open(image_path.replace(".jpg", "_caption.txt"), "w", encoding="utf-8") as f:
+        f.write(deal["caption"])
+
+    # 1) Telegram channel par auto-post
+    try:
+        with open(image_path, "rb") as photo:
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID, photo=photo, caption=deal["caption"]
+            )
+        storage.add_deal(
+            deal["title"], deal["affiliate_link"], deal["category"], deal["source_url"]
+        )
+        logger.info(f"Channel par auto-posted: {deal['title']}")
+    except Exception as e:
+        logger.error(f"Auto-post channel par fail hua: {e}")
+        return
+
+    # 2) Admin ko Instagram-ready image bhejo (bas upload karna hoga)
+    if ADMIN_USER_ID:
+        try:
+            with open(image_path, "rb") as photo:
+                await context.bot.send_photo(
+                    chat_id=ADMIN_USER_ID,
+                    photo=photo,
+                    caption=(
+                        "📸 Insta ke liye ready hai — bas upload kar do!\n\n"
+                        f"Caption:\n{deal['caption']}"
+                    ),
+                )
+        except Exception as e:
+            logger.warning(f"Admin ko Insta image bhejna fail hua: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +406,7 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Deal creation conversation — private chat only
+    # Deal creation conversation — private chat only (manual /deal command)
     conv = ConversationHandler(
         entry_points=[CommandHandler("deal", deal_start, filters=filters.ChatType.PRIVATE)],
         states={
@@ -358,7 +433,14 @@ def main():
         filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, moderate_group_message
     ))
 
-    logger.info("Trendora bot chal raha hai...")
+    # Automatic deal-finder scheduler — har AUTO_POST_INTERVAL_MINUTES mein chalega
+    app.job_queue.run_repeating(
+        auto_post_deal,
+        interval=AUTO_POST_INTERVAL_MINUTES * 60,
+        first=30,  # bot start hone ke 30 second baad pehli baar chalega
+    )
+
+    logger.info("Trendora bot chal raha hai (auto deal-posting ON)...")
     app.run_polling()
 
 

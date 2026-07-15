@@ -4,6 +4,7 @@ Lightweight JSON-file based storage — no external database needed.
 Stores:
   - users.json  -> private-chat users who can receive broadcasts
   - deals.json  -> recent deals tagged by category, for deal-request auto-replies
+                   AND for duplicate-post prevention (source_url based).
 """
 
 import json
@@ -41,16 +42,17 @@ def get_all_user_ids():
     return [int(uid) for uid in users.keys()]
 
 
-def add_deal(title: str, affiliate_link: str, category: str):
+def add_deal(title: str, affiliate_link: str, category: str, source_url: str = ""):
     deals = _load(DEALS_FILE, [])
     deals.append({
         "title": title,
         "link": affiliate_link,
+        "source_url": source_url,
         "category": category.lower().strip(),
         "posted_at": datetime.now().isoformat(),
     })
-    # keep only the most recent 200 deals to avoid unbounded growth
-    deals = deals[-200:]
+    # keep only the most recent 500 deals to avoid unbounded growth
+    deals = deals[-500:]
     _save(DEALS_FILE, deals)
 
 
@@ -58,3 +60,11 @@ def get_recent_deals_by_category(category: str, limit: int = 3):
     deals = _load(DEALS_FILE, [])
     matching = [d for d in deals if d["category"] == category.lower().strip()]
     return matching[-limit:][::-1]
+
+
+def is_already_posted(source_url: str) -> bool:
+    """Check karta hai ki ye product link pehle post ho chuka hai ya nahi."""
+    if not source_url:
+        return False
+    deals = _load(DEALS_FILE, [])
+    return any(d.get("source_url") == source_url for d in deals)
