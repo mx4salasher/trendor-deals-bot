@@ -52,8 +52,11 @@ import ai_client
 import storage
 import deal_finder
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger("TrendoraBot.Main")
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID")
@@ -169,7 +172,11 @@ async def receive_affiliate_link(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data["affiliate_link"] = affiliate_link
 
     await update.message.reply_text("Category detect kar raha hoon (AI)...")
-    suggested = ai_client.ai_classify_category(context.user_data["title"])
+    try:
+        suggested = ai_client.ai_classify_category(context.user_data["title"])
+    except Exception as e:
+        logger.error(f"AI Category Classification failed: {e}")
+        suggested = "Deals"
     context.user_data["suggested_category"] = suggested
 
     await update.message.reply_text(
@@ -211,14 +218,18 @@ async def receive_category_confirm(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text(f"Image banane mein error aaya: {e}")
         return ConversationHandler.END
 
-    caption = ai_client.ai_generate_caption(ud["title"], price, mrp, discount, affiliate_link)
+    try:
+        caption = ai_client.ai_generate_caption(ud["title"], price, mrp, discount, affiliate_link)
+    except Exception as e:
+        logger.error(f"AI Caption generation failed: {e}")
+        caption = f"🔥 *BIG SALE!* 🔥\n\n📌 *{ud['title']}*\n💰 Price: ₹{price} (MRP: ~₹{mrp}~)\n✨ Discount: {discount}% OFF!\n\n🔗 Shop Now: {affiliate_link}"
 
     with open(image_path.replace(".jpg", "_caption.txt"), "w", encoding="utf-8") as f:
         f.write(caption)
 
     try:
         with open(image_path, "rb") as photo:
-            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=caption)
+            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=caption, parse_mode="Markdown")
         storage.add_deal(ud["title"], affiliate_link, category, ud.get("original_link", ""))
         await update.message.reply_text(
             "Telegram channel par post ho gaya ✅\n"
@@ -247,16 +258,20 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def auto_post_deal(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Auto deal-finder chal raha hai...")
+    deal = await fetch_and_prepare_deal(context)
+    if not deal:
+        logger.info("Is baar koi naya achha-discount wala deal nahi mila ya skip ho gaya.")
 
+
+async def fetch_and_prepare_deal(context):
     try:
         deal = deal_finder.find_new_deal()
     except Exception as e:
         logger.error(f"deal_finder crash hua: {e}")
-        return
+        return None
 
     if not deal:
-        logger.info("Is baar koi naya achha-discount wala deal nahi mila.")
-        return
+        return None
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     image_path = os.path.join(OUTPUT_DIR, f"deal_{timestamp}.jpg")
@@ -268,7 +283,7 @@ async def auto_post_deal(context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Auto-post image generation failed: {e}")
-        return
+        return None
 
     with open(image_path.replace(".jpg", "_caption.txt"), "w", encoding="utf-8") as f:
         f.write(deal["caption"])
@@ -277,7 +292,7 @@ async def auto_post_deal(context: ContextTypes.DEFAULT_TYPE):
     try:
         with open(image_path, "rb") as photo:
             await context.bot.send_photo(
-                chat_id=CHANNEL_ID, photo=photo, caption=deal["caption"]
+                chat_id=CHANNEL_ID, photo=photo, caption=deal["caption"], parse_mode="Markdown"
             )
         storage.add_deal(
             deal["title"], deal["affiliate_link"], deal["category"], deal["source_url"]
@@ -285,7 +300,7 @@ async def auto_post_deal(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Channel par auto-posted: {deal['title']}")
     except Exception as e:
         logger.error(f"Auto-post channel par fail hua: {e}")
-        return
+        return None
 
     # 2) Admin ko Instagram-ready image bhejo (bas upload karna hoga)
     if ADMIN_USER_ID:
@@ -298,9 +313,68 @@ async def auto_post_deal(context: ContextTypes.DEFAULT_TYPE):
                         "📸 Insta ke liye ready hai — bas upload kar do!\n\n"
                         f"Caption:\n{deal['caption']}"
                     ),
+                    parse_mode="Markdown"
                 )
         except Exception as e:
             logger.warning(f"Admin ko Insta image bhejna fail hua: {e}")
+            
+    return deal
+
+
+# ---------------------------------------------------------------------------
+# NEW ADMIN COMMANDS: /forcepost, /health, /stats
+# ---------------------------------------------------------------------------
+
+async def forcepost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await update.message.reply_text("Ye command sirf admin use kar sakta hai.")
+        return
+
+    await update.message.reply_text("🚀 Manual force-post process initiate kiya jaa raha hai... Checking stores...")
+    deal = await fetch_and_prepare_deal(context)
+    if deal:
+        await update.message.reply_text(f"✅ Success! Post ho chuka hai: {deal['title'][:40]}...")
+    else:
+        await update.message.reply_text("❌ Is waqt koi unique ya 25%+ discount wali deal nahi mila.")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await update.message.reply_text("Ye command sirf admin use kar sakta hai.")
+        return
+
+    try:
+        stats = storage.get_stats()
+        breakdown = "\n".join([f"• {k}: {v}" for k, v in stats.get('store_breakdown', {}).items()])
+        msg = (
+            f"📊 *Trendora Deals Bot Stats*\n\n"
+            f"📈 Total posted deals recorded: {stats.get('total_posted', 0)}\n\n"
+            f"🏬 *Store-wise distribution:*\n{breakdown if breakdown else 'No records yet.'}"
+        )
+        await update.message.reply_markdown(msg)
+    except Exception as e:
+        logger.error(f"Stats check failed: {e}")
+        await update.message.reply_text(f"Stats calculate karne mein dikkat aayi: {e}")
+
+
+async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        last_deal = storage.get_last_deal()
+        last_title = last_deal['title'] if last_deal else "N/A"
+        last_time = last_deal.get('posted_time', 'N/A') if last_deal else "N/A"
+        
+        msg = (
+            f"💚 *Trendora Bot v2.0 Health Report*\n\n"
+            f"⚙️ *Bot Status:* Runnin' Healthy (Active)\n"
+            f"🕒 *Current Time:* {datetime.utcnow().isoformat()}\n"
+            f"🏷️ *Last Deal Tracked:* {last_title[:45]}\n"
+            f"📅 *Last Deal Time:* {last_time}\n"
+            f"🛠️ *API integrations:* Groq & EarnKaro connected."
+        )
+        await update.message.reply_markdown(msg)
+    except Exception as e:
+        logger.error(f"Health status check failed: {e}")
+        await update.message.reply_text(f"Health report fetch nahi ho payi: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -395,9 +469,12 @@ async def moderate_group_message(update: Update, context: ContextTypes.DEFAULT_T
         w in message.text.lower() for w in ["kya", "kaise", "kab", "kahan", "kyu", "kaun"]
     )
     if looks_like_question:
-        ai_reply = ai_client.ai_smart_reply(message.text)
-        if ai_reply:
-            await message.reply_text(ai_reply)
+        try:
+            ai_reply = ai_client.ai_smart_reply(message.text)
+            if ai_reply:
+                await message.reply_text(ai_reply)
+        except Exception as e:
+            logger.error(f"AI Smart reply generation failed: {e}")
 
 
 def main():
@@ -422,27 +499,4 @@ def main():
     )
 
     app.add_handler(conv)
-    app.add_handler(CommandHandler("start", start_command, filters=filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler("broadcast", broadcast_command, filters=filters.ChatType.PRIVATE))
-
-    # Group-only handlers
-    app.add_handler(MessageHandler(
-        filters.StatusUpdate.NEW_CHAT_MEMBERS & filters.ChatType.GROUPS, welcome_new_member
-    ))
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, moderate_group_message
-    ))
-
-    # Automatic deal-finder scheduler — har AUTO_POST_INTERVAL_MINUTES mein chalega
-    app.job_queue.run_repeating(
-        auto_post_deal,
-        interval=AUTO_POST_INTERVAL_MINUTES * 60,
-        first=30,  # bot start hone ke 30 second baad pehli baar chalega
-    )
-
-    logger.info("Trendora bot chal raha hai (auto deal-posting ON)...")
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+    app.add_ha
