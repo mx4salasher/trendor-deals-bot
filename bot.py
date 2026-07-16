@@ -483,7 +483,6 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Deal creation conversation — private chat only (manual /deal command)
     conv = ConversationHandler(
         entry_points=[CommandHandler("deal", deal_start, filters=filters.ChatType.PRIVATE)],
         states={
@@ -499,4 +498,14 @@ def main():
     )
 
     app.add_handler(conv)
-    app.add_ha
+
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, moderate_group_message)
+    )
+
+    logger.info("Bot started...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
