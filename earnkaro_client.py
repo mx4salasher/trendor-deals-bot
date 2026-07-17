@@ -1,28 +1,19 @@
-"""
-earnkaro_client.py
-Helper module to build EarnKaro affiliate links programmatically.
-"""
-import os
-import urllib.parse
+import aiohttp, os
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-EARNKARO_API_KEY = os.environ.get("EARNKARO_API_KEY")
-EARNKARO_SOURCE_ID = os.environ.get("EARNKARO_SOURCE_ID")
+API = "https://api.earnkaro.com/v1/link"
+KEY = os.getenv("EARNKARO_API_KEY")
 
-def create_affiliate_link(original_url: str) -> str:
-    """
-    Creates an EarnKaro affiliate link using redirection format or custom credentials.
-    """
-    if not original_url:
-        return ""
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2,max=10))
+async def get_affiliate_link(url):
+    if not KEY or KEY == "your-earnkaro-api-key":
+        return url  # agar key nahi hai toh original link hi return kar de
     
-    # Clean original URL
-    clean_url = original_url.split("?")[0].strip()
-    
-    # If key and source are present, construct standard API redirect link
-    if EARNKARO_API_KEY and EARNKARO_SOURCE_ID:
-        encoded_url = urllib.parse.quote_plus(clean_url)
-        # EarnKaro redirect structure format
-        return f"https://earnkaro.com/connect?api_key={EARNKARO_API_KEY}&source_id={EARNKARO_SOURCE_ID}&link={encoded_url}"
-    
-    # Fallback/Dummy representation if keys aren't set
-    return f"https://earnkaro.com/share?url={urllib.parse.quote_plus(clean_url)}"
+    async with aiohttp.ClientSession() as s:
+        try:
+            async with s.post(API, json={"url":url,"api_key":KEY}, timeout=10) as r:
+                data = await r.json()
+                return data.get("affiliate_url", url)
+        except Exception as e:
+            print(f"[EARNKARO ERROR] {e}")
+            return url
