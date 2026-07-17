@@ -1,56 +1,13 @@
-import os
 from groq import Groq
-import asyncio
-
+import os
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-async def generate_caption(deal, affiliate_link):
-    """Groq se deal ke liye catchy caption banwata hai"""
-    
-    title = deal['title']
-    price = deal['price']
-    original_price = deal.get('original_price', '')
-    discount = deal.get('discount', '')
-    
-    prompt = f"""
-    You are a deal hunter for Telegram. Write a short, catchy, Hinglish caption for this product deal.
-    Use emojis. Make it exciting and urgent. Add hashtags.
-    
-    Product: {title}
-    Price: {price}
-    MRP: {original_price}
-    Discount: {discount}
-    Link: {affiliate_link}
-    
-    Format:
-    🔥 DEAL ALERT 🔥
-    [Product Name]
-    💰 Price: [Price] ~~[MRP]~~ ([Discount] OFF)
-    
-    [1 line catchy reason to buy]
-    
-    👉 Buy Now: [Link]
-    
-    #Deal #Offer #Trending
-    """
-    
+async def get_ai_reply(user_msg):
     try:
-        chat_completion = client.chat.completions.create(
+        res = client.chat.completions.create(
             messages=[
-                {"role": "user", "content": prompt}
-            ],
-            model="llama3-8b-8192", # Groq ka fast model
-            temperature=0.7,
-            max_tokens=300,
-        )
-        return chat_completion.choices[0].message.content
-    except Exception as e:
-        print(f"Groq Error: {e}")
-        # Agar Groq fail ho to default caption
-        return f"""🔥 DEAL ALERT 🔥
-{title}
-💰 Price: {price} ~~{original_price}~~ ({discount} OFF)
-
-👉 Buy Now: {affiliate_link}
-
-#Deal #Offer"""
+                {"role": "system", "content": "Tu 'Deals Loot' telegram channel ka AI Admin hai. Hindi me, dosti se, 2-3 line me reply de. Product puchne par help kar."},
+                {"role": "user", "content": user_msg}
+            ], model="llama-3.1-8b-instant", max_tokens=200)
+        return res.choices[0].message.content
+    except: return "Bhai 2 min ruk, server busy hai 😅"
