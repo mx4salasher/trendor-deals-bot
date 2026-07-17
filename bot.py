@@ -1,74 +1,67 @@
 import os
-import asyncio
 import logging
+import asyncio
+from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from deal_finder import find_deals
+from telegram.ext import Application, CommandHandler, ContextTypes
+from apscheduler.schedulers.background import BackgroundScheduler
+from deal_finder import get_best_deal
 from earnkaro_client import get_affiliate_link
-from ai_client import generate_caption
-import storage
+from storage import is_posted, mark_posted
 
-# Variables Railway se
-TOKEN = os.getenv("BOT_TOKEN")
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def auto_post(app):
-    """Har 20 min me deal dhunde aur post kare"""
-    try:
-        logger.info("Checking for new deals...")
-        deals = await find_deals()
-        
-        for deal in deals:
-            if storage.is_new_deal(deal['url']):
-                # Earnkaro link banao
-                aff_link = get_affiliate_link(deal['url'])
-                
-                # Groq se caption banwao
-                caption = await generate_caption(deal, aff_link)
-                
-                # Telegram Channel pe post
-                await app.bot.send_photo(
-                    chat_id=CHANNEL_ID,
-                    photo=deal['image'],
-                    caption=caption,
-                    parse_mode="HTML"
-                )
-                storage.mark_posted(deal['url'])
-                logger.info(f"Posted: {deal['title']}")
-                await asyncio.sleep(3) # spam na ho
-                
-    except Exception as e:
-        logger.error(f"Error in auto_post: {e}")
-
-async def forcepost(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Manual test ke liye /forcepost command"""
-    if str(update.effective_user.id)!= ADMIN_ID:
+async def send_deal_to_channel(context: ContextTypes.DEFAULT_TYPE):
+    deal = await get_best_deal()
+    if not deal:
+        logger.info("No new deal found")
         return
-    await update.message.reply_text("Force posting started...")
-    await auto_post(context.application)
-    await update.message.reply_text("Done! Check channel.")
+    
+    if is_posted(deal['link']):
+        logger.info("Deal already posted")
+        return
 
-async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    affiliate_url = await get_affiliate_link(deal['link'])
+    
+    caption = f"🔥 *{deal['title']}*\n\n💰 Price: ₹{deal['price']}\n🏷️ Discount: {deal['discount']}\n\n👉 {affiliate_url}\n\n#Deal #Offer"
+    
+    await context.bot.send_photo(chat_id=CHANNEL_ID, photo=deal['image'], caption=caption, parse_mode='Markdown')
+    mark_posted(deal['link'])
+    logger.info(f"Posted: {deal['title']}")
 
-    # Commands
-    app.add_handler(CommandHandler("forcepost", forcepost))
+async def auto_post(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Running auto post job...")
+    await send_deal_to_channel(context)
 
-    # Scheduler - har 20 min
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(auto_post, 'interval', minutes=20, args=[app])
+async def force_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text("Force posting a deal...")
+    await send_deal_to_channel(context)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot is Live! I will post deals every 20 minutes.")
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("forcepost", force_post))
+    
+    # Scheduler for auto post every 20 min = 1200 sec
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(lambda: asyncio.run(auto_post(app)), 'interval', seconds=1200, id='auto_post')
     scheduler.start()
     
     logger.info("Bot Started. Auto-post every 20 minutes")
-    await app.run_polling()
+    app.run_polling()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    main()

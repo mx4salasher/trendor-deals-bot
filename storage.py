@@ -1,44 +1,21 @@
-import json, os, time
-from collections import deque
-from threading import Lock
+import json
+import os
 
-STORAGE_FILE = "deals_storage.json"
-MAX_DEALS = 1000
-lock = Lock()
+FILE_NAME = 'posted_deals.json'
 
-def _load():
-    if not os.path.exists(STORAGE_FILE):
-        return {"posted_links": [], "deals": []}
-    try:
-        with open(STORAGE_FILE, "r", encoding="utf-8") as f: 
-            data = json.load(f)
-        data["deals"] = deque(data.get("deals", []), maxlen=MAX_DEALS)
-        return data
-    except:
-        return {"posted_links": [], "deals": deque(maxlen=MAX_DEALS)}
+def load_posted():
+    if not os.path.exists(FILE_NAME):
+        return []
+    with open(FILE_NAME, 'r') as f:
+        return json.load(f)
 
-def _save(data):
-    with lock:
-        data["deals"] = list(data["deals"])
-        with open(STORAGE_FILE, "w", encoding="utf-8") as f: 
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        data["deals"] = deque(data["deals"], maxlen=MAX_DEALS)
+def is_posted(link):
+    posted = load_posted()
+    return link in posted
 
-def is_duplicate(url):
-    data = _load()
-    return url in data["posted_links"]
-
-def add_deal(deal):
-    data = _load()
-    data["posted_links"].append(deal["source_url"])
-    data["posted_links"] = data["posted_links"][-MAX_DEALS:]
-    deal["posted_time"] = int(time.time())
-    data["deals"].append(deal)
-    _save(data)
-
-def get_stats():
-    data = _load()
-    return {
-        "total_posted": len(data["posted_links"]), 
-        "last_deal": data["deals"][-1] if data["deals"] else None
-    }
+def mark_posted(link):
+    posted = load_posted()
+    if link not in posted:
+        posted.append(link)
+        with open(FILE_NAME, 'w') as f:
+            json.dump(posted, f)
