@@ -1,46 +1,56 @@
-import os, random
+import os
 from groq import Groq
+import asyncio
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-STYLES = ["hype", "urgent", "minimal", "funny"]
-
-async def generate_caption(product):
-    style = random.choice(STYLES)
-    tags = f"#{product['store']} #deals #sale #trendora"
-
-    prompt = f"""Write a {style} Telegram caption for this deal:
-Product: {product['title']}
-Price: {product['price']}
-MRP: {product['mrp']}
-Discount: {product['discount']}% OFF
-Link: {product['affiliate_link']}
-
-Format:
-🔥 Emoji + Product Name
-💰 Price + Discount
-✅ Key point
-🛒 Buy Now + Link
-{tags}
-Keep it under 400 characters. No extra text."""
-
+async def generate_caption(deal, affiliate_link):
+    """Groq se deal ke liye catchy caption banwata hai"""
+    
+    title = deal['title']
+    price = deal['price']
+    original_price = deal.get('original_price', '')
+    discount = deal.get('discount', '')
+    
+    prompt = f"""
+    You are a deal hunter for Telegram. Write a short, catchy, Hinglish caption for this product deal.
+    Use emojis. Make it exciting and urgent. Add hashtags.
+    
+    Product: {title}
+    Price: {price}
+    MRP: {original_price}
+    Discount: {discount}
+    Link: {affiliate_link}
+    
+    Format:
+    🔥 DEAL ALERT 🔥
+    [Product Name]
+    💰 Price: [Price] ~~[MRP]~~ ([Discount] OFF)
+    
+    [1 line catchy reason to buy]
+    
+    👉 Buy Now: [Link]
+    
+    #Deal #Offer #Trending
+    """
+    
     try:
-        res = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-            temperature=0.8
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            model="llama3-8b-8192", # Groq ka fast model
+            temperature=0.7,
+            max_tokens=300,
         )
-        return res.choices[0].message.content
+        return chat_completion.choices[0].message.content
     except Exception as e:
-        print(f"[AI ERROR] {e}")
-        # Fallback agar AI fail ho jaye
-        return f"""🔥 {product['title']}
-💰 Deal Price: {product['price']}
-❌ MRP: {product['mrp']}
-✅ {product['discount']}% OFF
+        print(f"Groq Error: {e}")
+        # Agar Groq fail ho to default caption
+        return f"""🔥 DEAL ALERT 🔥
+{title}
+💰 Price: {price} ~~{original_price}~~ ({discount} OFF)
 
-🛒 Buy Now 👇
-{product['affiliate_link']}
+👉 Buy Now: {affiliate_link}
 
-{tags}"""
+#Deal #Offer"""
