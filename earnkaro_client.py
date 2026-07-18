@@ -8,6 +8,7 @@ API_URL = "https://ekaro-api.affiliaters.in/api/converter/public"
 
 
 async def get_affiliate_link(url):
+
     api_key = os.getenv("EARNKARO_API_KEY")
 
     print("\n========== EARNKARO DEBUG ==========")
@@ -15,57 +16,83 @@ async def get_affiliate_link(url):
 
     if not api_key:
         print("❌ API KEY Missing")
+        print("====================================")
         return url
+
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
+
     payload = {
         "deal": url,
         "convert_option": "convert_only"
     }
 
+
     print("Payload Sent:", payload)
 
+
     try:
+
         async with aiohttp.ClientSession() as session:
+
             async with session.post(
                 API_URL,
                 headers=headers,
                 json=payload
-            ) as resp:
+            ) as response:
 
-                print("Status Code:", resp.status)
 
-                data = await resp.json()
+                print("Status Code:", response.status)
+
+
+                data = await response.json()
+
 
                 print("EarnKaro Response:")
                 print(data)
 
-                if resp.status == 200 and data.get("success") == 1:
+
+
+                if response.status == 200 and data.get("success") == 1:
 
                     affiliate_link = data.get("data")
 
-                    print("✅ Affiliate Link Generated:")
-                    print(affiliate_link)
 
-                    print("====================================\n")
+                    if (
+                        affiliate_link
+                        and isinstance(affiliate_link, str)
+                        and affiliate_link.startswith("http")
+                    ):
 
-                    return affiliate_link
+                        print("✅ Affiliate Link Generated:")
+                        print(affiliate_link)
+                        print("====================================\n")
 
-                else:
-                    print("❌ Affiliate conversion failed")
-                    print("Returning original URL")
+                        return affiliate_link
 
+
+
+                    print("❌ EarnKaro returned invalid link")
                     print("====================================\n")
 
                     return url
 
+
+
+                print("❌ Affiliate conversion failed")
+                print("====================================\n")
+
+                return url
+
+
+
     except Exception as e:
+
         print("❌ EarnKaro Error:", e)
-        print("Returning original URL")
         print("====================================\n")
 
         return url
