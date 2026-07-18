@@ -1,4 +1,3 @@
-import asyncio
 import aiohttp
 import os
 from dotenv import load_dotenv
@@ -12,29 +11,22 @@ async def get_affiliate_link(url):
 
     api_key = os.getenv("EARNKARO_API_KEY")
 
-    print("\n========== EARNKARO DEBUG ==========")
-    print("Original URL:", url)
-
     if not api_key:
-        print("❌ EARNKARO_API_KEY missing")
-        print("====================================\n")
+        print("❌ EarnKaro API Key Missing")
         return url
-
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
-
     payload = {
         "deal": url,
         "convert_option": "convert_only"
     }
 
-
-    print("Payload:", payload)
-
+    print("\n========== EARNKARO DEBUG ==========")
+    print("Original URL:", url)
 
     try:
 
@@ -46,85 +38,38 @@ async def get_affiliate_link(url):
                 API_URL,
                 headers=headers,
                 json=payload
-            ) as response:
+            ) as resp:
 
+                print("Status Code:", resp.status)
 
-                print("Status:", response.status)
-
-
-                try:
-                    data = await response.json()
-
-                except Exception:
-                    text = await response.text()
-                    print("❌ Non JSON Response:", text)
-
-                    return url
-
-
+                data = await resp.json()
 
                 print("Response:", data)
 
 
-
-                if response.status != 200:
-                    print("❌ API Failed")
-                    return url
+                affiliate_url = data.get("data")
 
 
-
-                if data.get("success") != 1:
-                    print("❌ EarnKaro success false")
-                    return url
-
-
-
-                affiliate_link = data.get("data")
-
-
-                # Check real URL
+                # Check real affiliate link
                 if (
-                    isinstance(affiliate_link, str)
-                    and affiliate_link.startswith("http")
+                    data.get("success") == 1
+                    and isinstance(affiliate_url, str)
+                    and affiliate_url.startswith("http")
                 ):
 
-                    print("✅ Affiliate Generated:")
-                    print(affiliate_link)
+                    print("✅ Affiliate Link Generated")
+                    print(affiliate_url)
 
-                    print("====================================\n")
-
-                    return affiliate_link
+                    return affiliate_url
 
 
+                print("❌ Affiliate Link Not Available")
+                print("Using Original Link")
 
-                else:
-
-                    print("❌ EarnKaro returned invalid link")
-                    print("Using original URL")
-
-                    print("====================================\n")
-
-                    return url
-
-
-
-    except asyncio.TimeoutError:
-
-        print("❌ EarnKaro Timeout")
-        print("Using original URL")
-
-        print("====================================\n")
-
-        return url
-
+                return url
 
 
     except Exception as e:
 
         print("❌ EarnKaro Error:", e)
-
-        print("Using original URL")
-
-        print("====================================\n")
-
         return url
